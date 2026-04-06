@@ -92,46 +92,50 @@ jobs:
 
           # 1. Kernel boot
           if grep -q "\[spiritos\] Kernel starting" boot-x86.log; then
-            echo "✅ PASS: kernel boot sequence started"
+            echo "PASS: kernel boot sequence started"
           else
-            echo "⚠️  INFO: no kernel boot message (may need multiboot header for QEMU -kernel)"
+            echo "INFO: no kernel boot message (may need multiboot header for QEMU -kernel)"
           fi
 
           # 2. Scheduler initialised
           if grep -q "\[spiritos\] Scheduler OK" boot-x86.log; then
-            echo "✅ PASS: scheduler initialised"
+            echo "PASS: scheduler initialised"
           else
-            echo "⚠️  INFO: scheduler OK message not found"
+            echo "INFO: scheduler OK message not found"
           fi
 
           # 3. RT properties banner
           if grep -q "\[rt\] scheduler: round-robin preemptive" boot-x86.log; then
-            echo "✅ PASS: RT properties banner present"
+            echo "PASS: RT properties banner present"
           else
-            echo "⚠️  INFO: RT properties banner not found"
+            echo "INFO: RT properties banner not found"
           fi
 
           # 4. Timer ticks fired (at least one [rt] timer tick line)
-          TICK_COUNT=$(grep -c "\[rt\] timer tick" boot-x86.log 2>/dev/null || echo 0)
-          if [ "$TICK_COUNT" -ge 1 ]; then
-            echo "✅ PASS: timer tick messages observed (count=$TICK_COUNT)"
+          TICK_COUNT=$(grep -c "\[rt\] timer tick" boot-x86.log 2>/dev/null || true)
+          TICK_COUNT=${TICK_COUNT:-0}
+          if [ "${TICK_COUNT}" -gt 0 ] 2>/dev/null; then
+            echo "PASS: timer tick messages observed count=${TICK_COUNT}"
           else
-            echo "⚠️  INFO: no timer tick messages (timer may not fire in QEMU -kernel mode without multiboot)"
+            echo "INFO: no timer tick messages (timer may not fire in QEMU -kernel mode without multiboot)"
           fi
 
           # 5. Context switches observed
-          CTX_COUNT=$(grep -c "\[rt\] context-switch" boot-x86.log 2>/dev/null || echo 0)
-          if [ "$CTX_COUNT" -ge 1 ]; then
-            echo "✅ PASS: context-switch messages observed (count=$CTX_COUNT)"
+          CTX_COUNT=$(grep -c "\[rt\] context-switch" boot-x86.log 2>/dev/null || true)
+          CTX_COUNT=${CTX_COUNT:-0}
+          if [ "${CTX_COUNT}" -gt 0 ] 2>/dev/null; then
+            echo "PASS: context-switch messages observed count=${CTX_COUNT}"
           else
-            echo "⚠️  INFO: no context-switch messages yet"
+            echo "INFO: no context-switch messages yet"
           fi
 
           # Overall: require at least the kernel to produce SOME output.
+          # x86_64 is lenient because -kernel without multiboot may produce no
+          # serial output (GRUB/multiboot header needed for full boot).
           if grep -qi "spiritos" boot-x86.log; then
-            echo "✅ PASS: kernel produced output — regression check passed"
+            echo "PASS: kernel produced output - regression check passed"
           else
-            echo "⚠️  WARN: no SpiritOS output at all (x86_64 may need multiboot header)"
+            echo "WARN: no SpiritOS output at all (x86_64 may need multiboot header)"
           fi
 
   qemu-aarch64:
@@ -145,7 +149,15 @@ jobs:
           targets: aarch64-unknown-none-softfloat
           components: rust-src,llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
-      - run: sudo apt-get install -y qemu-system-arm 2>&1 | tail -5
+      - name: Install QEMU (aarch64)
+        run: |
+          sudo apt-get update -qq
+          # The qemu-system-aarch64 binary ships in different packages depending
+          # on Ubuntu version; install both candidates and verify one is present.
+          sudo apt-get install -y qemu-system-arm 2>&1 | tail -5 || true
+          sudo apt-get install -y qemu-system-aarch64 2>&1 | tail -5 || true
+          which qemu-system-aarch64 || { echo "ERROR: qemu-system-aarch64 not found"; exit 1; }
+          qemu-system-aarch64 --version | head -1
       - name: Build
         working-directory: crates/spiritos-aarch64
         run: |
@@ -172,45 +184,49 @@ jobs:
 
           # 1. Kernel boot
           if grep -q "\[spiritos\] Kernel starting" boot-arm.log; then
-            echo "✅ PASS: kernel boot sequence started"
+            echo "PASS: kernel boot sequence started"
           else
-            echo "⚠️  INFO: no kernel boot message"
+            echo "INFO: no kernel boot message"
           fi
 
           # 2. Scheduler initialised
           if grep -q "\[spiritos\] Scheduler OK" boot-arm.log; then
-            echo "✅ PASS: scheduler initialised"
+            echo "PASS: scheduler initialised"
           else
-            echo "⚠️  INFO: scheduler OK message not found"
+            echo "INFO: scheduler OK message not found"
           fi
 
           # 3. RT properties banner
           if grep -q "\[rt\] scheduler: round-robin preemptive" boot-arm.log; then
-            echo "✅ PASS: RT properties banner present"
+            echo "PASS: RT properties banner present"
           else
-            echo "⚠️  INFO: RT properties banner not found"
+            echo "INFO: RT properties banner not found"
           fi
 
           # 4. Timer ticks fired
-          TICK_COUNT=$(grep -c "\[rt\] timer tick" boot-arm.log 2>/dev/null || echo 0)
-          if [ "$TICK_COUNT" -ge 1 ]; then
-            echo "✅ PASS: timer tick messages observed (count=$TICK_COUNT)"
+          # grep -c prints the count (0 when no match); avoid || echo 0 to
+          # prevent "0\n0" concatenation that breaks integer comparison.
+          TICK_COUNT=$(grep -c "\[rt\] timer tick" boot-arm.log 2>/dev/null || true)
+          TICK_COUNT=${TICK_COUNT:-0}
+          if [ "${TICK_COUNT}" -gt 0 ] 2>/dev/null; then
+            echo "PASS: timer tick messages observed count=${TICK_COUNT}"
           else
-            echo "⚠️  INFO: no timer tick messages"
+            echo "INFO: no timer tick messages count=${TICK_COUNT}"
           fi
 
           # 5. Context switches observed
-          CTX_COUNT=$(grep -c "\[rt\] context-switch" boot-arm.log 2>/dev/null || echo 0)
-          if [ "$CTX_COUNT" -ge 1 ]; then
-            echo "✅ PASS: context-switch messages observed (count=$CTX_COUNT)"
+          CTX_COUNT=$(grep -c "\[rt\] context-switch" boot-arm.log 2>/dev/null || true)
+          CTX_COUNT=${CTX_COUNT:-0}
+          if [ "${CTX_COUNT}" -gt 0 ] 2>/dev/null; then
+            echo "PASS: context-switch messages observed count=${CTX_COUNT}"
           else
-            echo "⚠️  INFO: no context-switch messages yet"
+            echo "INFO: no context-switch messages yet count=${CTX_COUNT}"
           fi
 
-          # Overall: require kernel to produce SOME output.
+          # Overall: aarch64 boots cleanly under QEMU virt; require output.
           if grep -qi "spiritos" boot-arm.log; then
-            echo "✅ PASS: kernel produced output — regression check passed"
+            echo "PASS: kernel produced output - regression check passed"
           else
-            echo "❌ FAIL: no SpiritOS output at all"
+            echo "FAIL: no SpiritOS output at all"
             exit 1
           fi
