@@ -54,7 +54,7 @@ jobs:
           path: target/aarch64-unknown-none-softfloat/debug/spiritos-aarch64
 
   qemu-x86_64:
-    name: QEMU x86_64
+    name: QEMU x86_64 (boot + RT smoke test)
     runs-on: ubuntu-latest
     needs: build-x86_64
     steps:
@@ -72,16 +72,69 @@ jobs:
             -Z build-std=core,compiler_builtins \
             -Z build-std-features=compiler-builtins-mem \
             --target x86_64-unknown-none
-      - name: QEMU boot test
+      - name: QEMU boot + real-time smoke test
         run: |
-          timeout 8 qemu-system-x86_64 \
+          # Boot SpiritOS under QEMU and capture 10 seconds of serial output.
+          # This is a SMOKE TEST / REGRESSION CHECK only.
+          # It verifies that the kernel boots, the scheduler starts, and the
+          # timer fires (log markers appear).  It does NOT prove hard real-time
+          # guarantees — those require hardware measurement with oscilloscopes
+          # or dedicated RT benchmarking tools on bare metal.
+          timeout 10 qemu-system-x86_64 \
             -kernel target/x86_64-unknown-none/debug/spiritos-x86_64 \
             -serial stdio -display none -no-reboot -m 128M 2>&1 | tee boot-x86.log || true
+
+          echo "=== Serial log ==="
           cat boot-x86.log
-          grep -qi "spiritos" boot-x86.log && echo "✅ Boot OK" || echo "⚠️ No output (may need multiboot header)"
+
+          echo "=== RT verification checks ==="
+
+          # 1. Kernel boot
+          if grep -q "\[spiritos\] Kernel starting" boot-x86.log; then
+            echo "✅ PASS: kernel boot sequence started"
+          else
+            echo "⚠️  INFO: no kernel boot message (may need multiboot header for QEMU -kernel)"
+          fi
+
+          # 2. Scheduler initialised
+          if grep -q "\[spiritos\] Scheduler OK" boot-x86.log; then
+            echo "✅ PASS: scheduler initialised"
+          else
+            echo "⚠️  INFO: scheduler OK message not found"
+          fi
+
+          # 3. RT properties banner
+          if grep -q "\[rt\] scheduler: round-robin preemptive" boot-x86.log; then
+            echo "✅ PASS: RT properties banner present"
+          else
+            echo "⚠️  INFO: RT properties banner not found"
+          fi
+
+          # 4. Timer ticks fired (at least one [rt] timer tick line)
+          TICK_COUNT=$(grep -c "\[rt\] timer tick" boot-x86.log 2>/dev/null || echo 0)
+          if [ "$TICK_COUNT" -ge 1 ]; then
+            echo "✅ PASS: timer tick messages observed (count=$TICK_COUNT)"
+          else
+            echo "⚠️  INFO: no timer tick messages (timer may not fire in QEMU -kernel mode without multiboot)"
+          fi
+
+          # 5. Context switches observed
+          CTX_COUNT=$(grep -c "\[rt\] context-switch" boot-x86.log 2>/dev/null || echo 0)
+          if [ "$CTX_COUNT" -ge 1 ]; then
+            echo "✅ PASS: context-switch messages observed (count=$CTX_COUNT)"
+          else
+            echo "⚠️  INFO: no context-switch messages yet"
+          fi
+
+          # Overall: require at least the kernel to produce SOME output.
+          if grep -qi "spiritos" boot-x86.log; then
+            echo "✅ PASS: kernel produced output — regression check passed"
+          else
+            echo "⚠️  WARN: no SpiritOS output at all (x86_64 may need multiboot header)"
+          fi
 
   qemu-aarch64:
-    name: QEMU aarch64
+    name: QEMU aarch64 (boot + RT smoke test)
     runs-on: ubuntu-latest
     needs: build-aarch64
     steps:
@@ -99,11 +152,64 @@ jobs:
             -Z build-std=core,compiler_builtins \
             -Z build-std-features=compiler-builtins-mem \
             --target aarch64-unknown-none-softfloat
-      - name: QEMU boot test
+      - name: QEMU boot + real-time smoke test
         run: |
-          timeout 8 qemu-system-aarch64 \
+          # Boot SpiritOS under QEMU and capture 10 seconds of serial output.
+          # This is a SMOKE TEST / REGRESSION CHECK only.
+          # It verifies that the kernel boots, the scheduler starts, and the
+          # timer fires (log markers appear).  It does NOT prove hard real-time
+          # guarantees — those require hardware measurement on bare metal.
+          timeout 10 qemu-system-aarch64 \
             -M virt -cpu cortex-a53 -m 128M \
             -kernel target/aarch64-unknown-none-softfloat/debug/spiritos-aarch64 \
             -serial stdio -display none -no-reboot 2>&1 | tee boot-arm.log || true
+
+          echo "=== Serial log ==="
           cat boot-arm.log
-          grep -qi "spiritos" boot-arm.log && echo "✅ Boot OK" || echo "⚠️ No output yet"
+
+          echo "=== RT verification checks ==="
+
+          # 1. Kernel boot
+          if grep -q "\[spiritos\] Kernel starting" boot-arm.log; then
+            echo "✅ PASS: kernel boot sequence started"
+          else
+            echo "⚠️  INFO: no kernel boot message"
+          fi
+
+          # 2. Scheduler initialised
+          if grep -q "\[spiritos\] Scheduler OK" boot-arm.log; then
+            echo "✅ PASS: scheduler initialised"
+          else
+            echo "⚠️  INFO: scheduler OK message not found"
+          fi
+
+          # 3. RT properties banner
+          if grep -q "\[rt\] scheduler: round-robin preemptive" boot-arm.log; then
+            echo "✅ PASS: RT properties banner present"
+          else
+            echo "⚠️  INFO: RT properties banner not found"
+          fi
+
+          # 4. Timer ticks fired
+          TICK_COUNT=$(grep -c "\[rt\] timer tick" boot-arm.log 2>/dev/null || echo 0)
+          if [ "$TICK_COUNT" -ge 1 ]; then
+            echo "✅ PASS: timer tick messages observed (count=$TICK_COUNT)"
+          else
+            echo "⚠️  INFO: no timer tick messages"
+          fi
+
+          # 5. Context switches observed
+          CTX_COUNT=$(grep -c "\[rt\] context-switch" boot-arm.log 2>/dev/null || echo 0)
+          if [ "$CTX_COUNT" -ge 1 ]; then
+            echo "✅ PASS: context-switch messages observed (count=$CTX_COUNT)"
+          else
+            echo "⚠️  INFO: no context-switch messages yet"
+          fi
+
+          # Overall: require kernel to produce SOME output.
+          if grep -qi "spiritos" boot-arm.log; then
+            echo "✅ PASS: kernel produced output — regression check passed"
+          else
+            echo "❌ FAIL: no SpiritOS output at all"
+            exit 1
+          fi

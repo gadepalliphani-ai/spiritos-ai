@@ -48,11 +48,19 @@ impl GenericTimer {
 
 /// Timer IRQ handler (~100 Hz): rearm, tick, and trigger preemption.
 pub fn timer_irq_handler(_irq: u32) {
-    TICK_COUNT.fetch_add(1, Ordering::Relaxed);
+    let tick = TICK_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
 
     // Rearm the timer for the next tick.
     let ticks = GenericTimer::freq() / 100;
     GenericTimer::set_tval(ticks);
+
+    // Emit a log line every 10 ticks (~100 ms at 100 Hz) so that CI and
+    // human observers can confirm the timer is firing at the expected cadence.
+    if tick % 10 == 0 {
+        if let Some(p) = spiritos_hal::platform::get_opt() {
+            p.console.writeln("[rt] timer tick (100 Hz, Generic Timer)");
+        }
+    }
 
     // Trigger round-robin preemption.
     spiritos_kernel::scheduler::schedule();

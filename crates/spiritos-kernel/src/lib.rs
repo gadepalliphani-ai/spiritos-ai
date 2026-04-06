@@ -32,5 +32,7 @@ pub fn kernel_main() -> ! {
     p.console.writeln("[spiritos] Interrupts enabled");
 
     p.console.writeln("[spiritos] SpiritOS.ai v0.2 - context switching active");
+    p.console.writeln("[rt] scheduler: round-robin preemptive, tick=100Hz");
+    p.console.writeln("[rt] latency: QEMU smoke-test only; hard RT requires hardware measurement");
     scheduler::run()
 }
