@@ -65,7 +65,7 @@ pub extern "C" fn _start() -> ! {
 fn demo_task() -> ! {
     let p = platform::get();
     loop {
-        p.console.writeln("[task:hello] Hello from context-switched task!");
+        p.console.writeln("[rt] context-switch: task 'hello' running");
         for _ in 0..1_000_000u64 {
             core::hint::spin_loop();
         }

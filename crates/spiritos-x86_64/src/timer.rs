@@ -47,7 +47,7 @@ impl PitTimer {
 
 /// IRQ0 handler — advance the tick counter, acknowledge the PIC, and preempt.
 pub fn pit_irq_handler(_irq: u32) {
-    TICK_COUNT.fetch_add(1, Ordering::Relaxed);
+    let tick = TICK_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
 
     // Send End-Of-Interrupt to the master PIC.
     unsafe {
@@ -57,6 +57,14 @@ pub fn pit_irq_handler(_irq: u32) {
             in("al") 0x20u8,
             options(nomem, nostack)
         );
+    }
+
+    // Emit a log line every 10 ticks (~100 ms at 100 Hz) so that CI and
+    // human observers can confirm the timer is firing at the expected cadence.
+    if tick % 10 == 0 {
+        if let Some(p) = spiritos_hal::platform::get_opt() {
+            p.console.writeln("[rt] timer tick (100 Hz, PIT)");
+        }
     }
 
     // Trigger round-robin preemption.
