@@ -1,18 +1,23 @@
 //! x86_64 context switching.
 //!
-//! ## Saved context layout (on stack, top-down after switch_to pushes):
+//! ## Saved context layout (on stack, ascending from `rsp` after switch_to pushes):
+//!
+//! `switch_to` saves with: `pushfq`, `push r15`, `push r14`, `push r13`,
+//! `push r12`, `push rbp`, `push rbx`.  The last push leaves `rbx` at `[rsp]`.
+//!
 //! ```text
-//! [rsp+0x38] rflags
-//! [rsp+0x30] r15
-//! [rsp+0x28] r14
-//! [rsp+0x20] r13
-//! [rsp+0x18] r12
-//! [rsp+0x10] rbp
-//! [rsp+0x08] rbx
-//! [rsp+0x00] rip  (return address / task entry)
+//! [rsp+0x00] rbx   ← rsp points here (last push / first pop)
+//! [rsp+0x08] rbp
+//! [rsp+0x10] r12
+//! [rsp+0x18] r13
+//! [rsp+0x20] r14
+//! [rsp+0x28] r15
+//! [rsp+0x30] rflags
+//! [rsp+0x38] rip   ← ret pops this to resume the task
 //! ```
-//! `switch_to` saves this frame on the current stack, updates `*current_sp`,
-//! loads `next_sp`, restores the frame, and `ret`s into the next task.
+//!
+//! `init_stack` must lay out the initial frame in exactly this order so that
+//! the first `switch_to` into a new task restores the correct values.
 
 use spiritos_kernel::context::ContextSwitch;
 
@@ -24,29 +29,24 @@ pub static X86_CONTEXT: X86Context = X86Context;
 
 impl ContextSwitch for X86Context {
     unsafe fn init_stack(&self, stack_top: usize, entry: fn() -> !) -> usize {
-        // x86-64 ABI: rsp must be 16-byte aligned *before* a `call` instruction,
-        // which means 8-byte aligned at the function prologue (call pushes 8 bytes).
-        // We align to 16 then subtract 8 to simulate "just entered via call".
-        let mut sp = (stack_top & !0xF) - 8;
+        // The restored frame must match switch_to's pop sequence exactly:
+        //   pop rbx, pop rbp, pop r12, pop r13, pop r14, pop r15, popfq, ret
+        //
+        // We build it at fixed offsets from `sp` so the order is unambiguous.
+        // Total frame = 7 registers (8 bytes each) + 1 rip (8 bytes) = 64 bytes.
+        // Align sp to 16 bytes and subtract the full frame size.
+        let sp = (stack_top & !0xF) - 64;
 
-        // Fake return address — the entry function is `fn() -> !` and must never
-        // return, but having a sentinel here makes stack traces cleaner.
-        sp -= 8;
-        *(sp as *mut usize) = 0usize;
-
-        // Entry point: this will be `ret`-ed to by switch_to.
-        sp -= 8;
-        *(sp as *mut usize) = entry as usize;
-
-        // Callee-saved registers saved by switch_to (pop order: rbx, rbp, r12..r15, rflags).
-        // Lay them out so pop order matches push order in switch_to.
-        sp -= 8; *(sp as *mut usize) = 0;      // rbx
-        sp -= 8; *(sp as *mut usize) = 0;      // rbp
-        sp -= 8; *(sp as *mut usize) = 0;      // r12
-        sp -= 8; *(sp as *mut usize) = 0;      // r13
-        sp -= 8; *(sp as *mut usize) = 0;      // r14
-        sp -= 8; *(sp as *mut usize) = 0;      // r15
-        sp -= 8; *(sp as *mut usize) = 0x0202; // rflags (IF=1, reserved bit 1)
+        let frame = sp as *mut usize;
+        // Offsets match switch_to's pop order (ascending from rsp):
+        *frame.add(0) = 0;            // rbx
+        *frame.add(1) = 0;            // rbp
+        *frame.add(2) = 0;            // r12
+        *frame.add(3) = 0;            // r13
+        *frame.add(4) = 0;            // r14
+        *frame.add(5) = 0;            // r15
+        *frame.add(6) = 0x0202;       // rflags: IF=1 (bit 9), reserved bit 1 set
+        *frame.add(7) = entry as usize; // rip: `ret` jumps here
 
         sp
     }

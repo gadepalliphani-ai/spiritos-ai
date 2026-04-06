@@ -172,13 +172,33 @@ pub fn schedule() {
         #[allow(static_mut_refs)]
         let next_sp = TASKS[next_idx].as_ref().unwrap().sp;
 
-        // Release the guard before switching.  The lock is re-acquired on the
-        // next call, not on return from switch_to (which may resume a different
-        // task entirely).
+        // Disable interrupts before releasing the guard and switching stacks.
+        //
+        // Safety rationale: between `SCHEDULING.store(false)` and `switch_to`
+        // returning (on the next task's stack) there is a window during which
+        // `CURRENT` already points to `next_idx` but the CPU is still executing
+        // on the *current* task's stack.  If a timer IRQ fires in this gap it
+        // will call `schedule()` with an inconsistent view of "current task",
+        // potentially saving/restoring the wrong stack pointer.
+        //
+        // Disabling interrupts closes this window.  Interrupts are automatically
+        // re-enabled when the switched-to task restores its saved flags (rflags
+        // on x86 with IF=1, DAIF on aarch64 via the vector table's IRQ unmasking
+        // or the next eret).  The platform HAL's `disable()`/`enable()` pair is
+        // architecture-specific and lightweight (e.g., `cli`/`sti` on x86).
+        let p = spiritos_hal::platform::get();
+        p.interrupts.disable();
+
+        // Release the re-entrancy guard now that interrupts are off; a timer
+        // IRQ cannot preempt us until interrupts are re-enabled by switch_to.
         SCHEDULING.store(false, Ordering::Release);
 
         let ctx = context::get_backend();
         ctx.switch_to(current_sp_ptr, next_sp);
+
+        // Execution resumes here when *this* task is switched back to.
+        // Interrupts are restored as part of the saved rflags/DAIF in switch_to,
+        // so no explicit re-enable is needed here.
     }
 }
 
