@@ -8,6 +8,9 @@ use core::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
 
 const MAX_TASKS: usize = 16;
 
+/// Maximum number of tasks that arch crates can register before mm is ready.
+const MAX_STARTUP_TASKS: usize = 8;
+
 // Option<Task> is not Copy; use a const sentinel to initialise the array.
 const NONE_TASK: Option<Task> = None;
 
@@ -19,15 +22,68 @@ static mut TASK_COUNT: usize = 0;
 static CURRENT: AtomicUsize = AtomicUsize::new(0);
 static INITIALIZED: AtomicBool = AtomicBool::new(false);
 
-/// Initialise the scheduler subsystem.
+/// Re-entrancy guard: set while schedule() is executing to prevent nested calls
+/// (e.g. a timer IRQ firing while a cooperative yield is in progress).
+static SCHEDULING: AtomicBool = AtomicBool::new(false);
+
+// --- Startup task registry --------------------------------------------------
+//
+// Arch crates call `register_startup_task()` before `kernel_main()`, but
+// `spawn()` requires mm to be initialised first.  We buffer the requests here
+// and drain them inside `init()`, which is called after `mm::init()`.
+
+#[derive(Copy, Clone)]
+struct StartupEntry {
+    name:     &'static str,
+    priority: u8,
+    entry:    fn() -> !,
+}
+
+const NONE_STARTUP: Option<StartupEntry> = None;
+static mut STARTUP_TASKS: [Option<StartupEntry>; MAX_STARTUP_TASKS] =
+    [NONE_STARTUP; MAX_STARTUP_TASKS];
+static mut STARTUP_COUNT: usize = 0;
+
+/// Register a task to be spawned once `mm::init()` has completed.
+///
+/// Call this from the arch crate's `_start()` before `kernel_main()`.
+///
+/// # Safety
+/// Must not be called concurrently.
+pub unsafe fn register_startup_task(name: &'static str, priority: u8, entry: fn() -> !) {
+    #[allow(static_mut_refs)]
+    let n = STARTUP_COUNT;
+    assert!(n < MAX_STARTUP_TASKS, "too many startup tasks");
+    #[allow(static_mut_refs)]
+    {
+        STARTUP_TASKS[n] = Some(StartupEntry { name, priority, entry });
+        STARTUP_COUNT += 1;
+    }
+}
+
+// ----------------------------------------------------------------------------
+
+/// Initialise the scheduler and spawn any tasks registered via
+/// `register_startup_task()`.  Called after `mm::init()`.
 pub fn init() {
     INITIALIZED.store(true, Ordering::Relaxed);
+    // Drain the startup queue now that mm is ready.
+    unsafe {
+        #[allow(static_mut_refs)]
+        let count = STARTUP_COUNT;
+        for i in 0..count {
+            #[allow(static_mut_refs)]
+            if let Some(e) = STARTUP_TASKS[i] {
+                spawn(e.name, e.priority, e.entry);
+            }
+        }
+    }
 }
 
 /// Spawn a new task. Returns its task ID.
 ///
 /// # Safety
-/// Must not be called concurrently.
+/// Must not be called concurrently, and must be called after `mm::init()`.
 pub unsafe fn spawn(name: &'static str, priority: u8, entry: fn() -> !) -> usize {
     #[allow(static_mut_refs)]
     let n = TASK_COUNT;
@@ -55,11 +111,22 @@ pub unsafe fn spawn(name: &'static str, priority: u8, entry: fn() -> !) -> usize
 }
 
 /// Called by the timer interrupt. Picks the next Ready task and switches to it.
+///
+/// Safe to call from both task context (`yield_now`) and IRQ context.  A
+/// re-entrancy guard prevents nested invocations that could corrupt the task
+/// table when a timer tick fires during a cooperative yield.
 pub fn schedule() {
+    // Re-entrancy guard: if a timer IRQ fires while we are already inside
+    // schedule(), bail out to avoid aliased mutable access to TASKS.
+    if SCHEDULING.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
+        return;
+    }
+
     unsafe {
         #[allow(static_mut_refs)]
         let count = TASK_COUNT;
         if count == 0 {
+            SCHEDULING.store(false, Ordering::Release);
             return;
         }
 
@@ -78,11 +145,8 @@ pub fn schedule() {
             }
             next_idx = (next_idx + 1) % count;
         }
-        if !found {
-            return;
-        }
-        // Nothing to do if the only runnable task is the current one.
-        if next_idx == current_idx {
+        if !found || next_idx == current_idx {
+            SCHEDULING.store(false, Ordering::Release);
             return;
         }
 
@@ -107,6 +171,11 @@ pub fn schedule() {
         };
         #[allow(static_mut_refs)]
         let next_sp = TASKS[next_idx].as_ref().unwrap().sp;
+
+        // Release the guard before switching.  The lock is re-acquired on the
+        // next call, not on return from switch_to (which may resume a different
+        // task entirely).
+        SCHEDULING.store(false, Ordering::Release);
 
         let ctx = context::get_backend();
         ctx.switch_to(current_sp_ptr, next_sp);

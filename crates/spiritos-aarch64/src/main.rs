@@ -12,6 +12,7 @@ mod interrupts;
 mod memory;
 mod cpu;
 mod context;
+mod vectors;
 
 use console::Pl011Uart;
 use timer::GenericTimer;
@@ -41,6 +42,9 @@ pub extern "C" fn _start() -> ! {
         spiritos_kernel::context::set_backend(&AARCH64_CONTEXT);
     }
 
+    // Install the exception vector table so that IRQs are dispatched.
+    vectors::init();
+
     // Arm the Generic Timer for ~100 Hz preemption ticks.
     let ticks = GenericTimer::freq() / 100;
     GenericTimer::set_tval(ticks);
@@ -49,9 +53,9 @@ pub extern "C" fn _start() -> ! {
     INTERRUPTS.register_handler(30, timer::timer_irq_handler);
     INTERRUPTS.unmask(30);
 
-    // Spawn a demonstration task.
+    // Register the demo task to be spawned after mm::init() inside kernel_main.
     unsafe {
-        spiritos_kernel::scheduler::spawn("hello", 1, demo_task);
+        spiritos_kernel::scheduler::register_startup_task("hello", 1, demo_task);
     }
 
     spiritos_kernel::kernel_main()

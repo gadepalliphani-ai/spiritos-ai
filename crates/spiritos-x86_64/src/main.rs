@@ -12,6 +12,7 @@ mod interrupts;
 mod memory;
 mod cpu;
 mod context;
+mod idt;
 
 use console::SerialConsole;
 use timer::PitTimer;
@@ -41,6 +42,10 @@ pub extern "C" fn _start() -> ! {
         spiritos_kernel::context::set_backend(&X86_CONTEXT);
     }
 
+    // Set up the Interrupt Descriptor Table so that hardware IRQs are
+    // dispatched to our registered handlers.
+    idt::init();
+
     // Programme the PIT for ~100 Hz preemption ticks.
     PitTimer::init_pit();
 
@@ -48,9 +53,9 @@ pub extern "C" fn _start() -> ! {
     INTERRUPTS.register_handler(0, timer::pit_irq_handler);
     INTERRUPTS.unmask(0);
 
-    // Spawn a demonstration task that will be preempted by the timer.
+    // Register the demo task to be spawned after mm::init() inside kernel_main.
     unsafe {
-        spiritos_kernel::scheduler::spawn("hello", 1, demo_task);
+        spiritos_kernel::scheduler::register_startup_task("hello", 1, demo_task);
     }
 
     spiritos_kernel::kernel_main()

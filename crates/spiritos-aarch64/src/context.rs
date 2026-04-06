@@ -47,6 +47,12 @@ impl ContextSwitch for Aarch64Context {
 
     unsafe fn switch_to(&self, current_sp: *mut usize, next_sp: usize) {
         // NOTE: `options(nostack)` is intentionally absent — we manipulate sp.
+        //
+        // Bug fix: avoid hard-coding x9 as a scratch register.  The compiler
+        // may assign {current_sp} or {next_sp} to x9, which would cause x9 to
+        // be overwritten by `mov {tmp}, sp` before use.  We instead declare an
+        // explicit `lateout(reg)` scratch operand so the compiler avoids the
+        // conflict.
         core::arch::asm!(
             // --- Save callee-saved registers onto the current stack ---
             // Allocate 96 bytes and store x19:x20 at [sp].
@@ -57,11 +63,11 @@ impl ContextSwitch for Aarch64Context {
             "stp x27, x28, [sp, #64]",
             "stp x29, x30, [sp, #80]",
 
-            // --- Persist current sp ---
-            // sp cannot be used as a source in ordinary instructions directly,
-            // so move it to a temporary general-purpose register first.
-            "mov x9, sp",
-            "str x9, [{current_sp}]",
+            // --- Persist current sp using a compiler-assigned scratch reg ---
+            // sp cannot be used as a source in ordinary instructions directly;
+            // move it to a temp register first.
+            "mov {tmp}, sp",
+            "str {tmp}, [{current_sp}]",
 
             // --- Switch to next task's stack ---
             "mov sp, {next_sp}",
@@ -79,6 +85,7 @@ impl ContextSwitch for Aarch64Context {
 
             current_sp = in(reg) current_sp,
             next_sp    = in(reg) next_sp,
+            tmp        = lateout(reg) _,  // scratch — must not alias current_sp/next_sp
             // No `options(nostack)` — we are modifying sp.
         );
     }
