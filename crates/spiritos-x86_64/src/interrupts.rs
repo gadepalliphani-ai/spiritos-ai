@@ -1,5 +1,18 @@
 use spiritos_hal::interrupts::{Interrupts, IrqHandler};
 
+/// Called by IDT stubs (via `idt::irq_dispatch`) to invoke the registered handler.
+pub fn dispatch(irq: u32) {
+    if (irq as usize) < 16 {
+        let handler = unsafe {
+            #[allow(static_mut_refs)]
+            HANDLERS[irq as usize]
+        };
+        if let Some(h) = handler {
+            h(irq);
+        }
+    }
+}
+
 pub struct PicInterrupts;
 unsafe impl Send for PicInterrupts {}
 unsafe impl Sync for PicInterrupts {}
