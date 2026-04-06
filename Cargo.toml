@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/spiritos-hal",
+    "crates/spiritos-abi",
+    "crates/spiritos-kernel",
+    "crates/spiritos-x86_64",
+    "crates/spiritos-aarch64",
+]
+
+[profile.dev]
+panic = "abort"
+opt-level = 1
+
+[profile.release]
+panic = "abort"

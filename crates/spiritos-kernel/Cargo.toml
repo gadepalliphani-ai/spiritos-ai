@@ -1,0 +1,13 @@
+[package]
+name = "spiritos-kernel"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+spiritos-hal = { path = "../spiritos-hal" }
+spiritos-abi = { path = "../spiritos-abi" }
+
+[features]
+default = []
+smp = []
+debug-log = []

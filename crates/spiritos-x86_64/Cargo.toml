@@ -1,0 +1,19 @@
+[package]
+name = "spiritos-x86_64"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "spiritos-x86_64"
+path = "src/main.rs"
+
+[dependencies]
+spiritos-hal    = { path = "../spiritos-hal" }
+spiritos-kernel = { path = "../spiritos-kernel" }
+
+[profile.dev]
+panic = "abort"
+opt-level = 1
+
+[profile.release]
+panic = "abort"
